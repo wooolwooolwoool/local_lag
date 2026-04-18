@@ -1,0 +1,9 @@
+faiss-cpu
+sentence-transformers
+fastapi
+uvicorn
+rank-bm25
+python-docx
+openpyxl
+streamlit
+requests
