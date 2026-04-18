@@ -14,8 +14,6 @@ INDEX_DIR = "index"
 
 model = SentenceTransformer("BAAI/bge-small-en")
 
-documents = []
-metadatas = []
 
 # ------------------------
 # ファイル探索（再帰）
@@ -25,23 +23,23 @@ def list_files(root):
         for f in filenames:
             yield os.path.join(dirpath, f)
 
-# ------------------------
-# 各ファイル読み込み
-# ------------------------
 
+# ------------------------
+# 読み込み
+# ------------------------
 def read_txt(path):
     with open(path, "r", encoding="utf-8", errors="ignore") as f:
         return f.read()
 
+
 def read_code(path):
     return read_txt(path)
 
+
 def read_docx(path):
     doc = Document(path)
-    texts = []
-    for para in doc.paragraphs:
-        texts.append(para.text)
-    return "\n".join(texts)
+    return "\n".join([p.text for p in doc.paragraphs])
+
 
 def read_excel(path):
     wb = openpyxl.load_workbook(path, data_only=True)
@@ -49,15 +47,15 @@ def read_excel(path):
     for sheet in wb.worksheets:
         texts.append(f"[Sheet: {sheet.title}]")
         for row in sheet.iter_rows(values_only=True):
-            row_text = " ".join([str(cell) for cell in row if cell is not None])
+            row_text = " ".join([str(c) for c in row if c is not None])
             if row_text:
                 texts.append(row_text)
     return "\n".join(texts)
 
-# ------------------------
-# チャンク分割（タイプ別）
-# ------------------------
 
+# ------------------------
+# チャンク
+# ------------------------
 def chunk_text(text, size=500, overlap=50):
     chunks = []
     start = 0
@@ -67,8 +65,8 @@ def chunk_text(text, size=500, overlap=50):
         start += size - overlap
     return chunks
 
+
 def chunk_code(text):
-    # 関数っぽい単位で分割（簡易）
     lines = text.split("\n")
     chunks = []
     current = []
@@ -85,26 +83,29 @@ def chunk_code(text):
 
     return chunks
 
+
 def chunk_excel(text):
-    # Excelはそのまま小さめチャンク
     return chunk_text(text, size=300, overlap=50)
 
+
 # ------------------------
-# メイン ingest
+# ingest
 # ------------------------
+def ingest(db_name):
+    data_path = os.path.join(DATA_DIR, db_name)
+    index_path = os.path.join(INDEX_DIR, db_name)
 
-def ingest():
-    global documents, metadatas
+    os.makedirs(index_path, exist_ok=True)
 
-    documents.clear()
-    metadatas.clear()
+    documents = []
+    metadatas = []
 
-    files = list(list_files(DATA_DIR))
-    print(f"Found {len(files)} files")
+    files = list(list_files(data_path))
+    print(f"[{db_name}] Found {len(files)} files")
 
     for path in files:
         ext = os.path.splitext(path)[1].lower()
-        fname = os.path.relpath(path, DATA_DIR)
+        fname = os.path.relpath(path, data_path)
 
         try:
             if ext in [".txt", ".md"]:
@@ -134,45 +135,45 @@ def ingest():
                 metadatas.append({
                     "source": fname,
                     "chunk_id": i,
+                    "db": db_name,
                     "type": ext
                 })
 
         except Exception as e:
             print(f"Error processing {path}: {e}")
 
-    print(f"Total chunks: {len(documents)}")
+    print(f"[{db_name}] Total chunks: {len(documents)}")
 
-    # ------------------------
+    if not documents:
+        print("No documents found. Abort.")
+        return
+
     # embedding
-    # ------------------------
     embeddings = model.encode(documents, show_progress_bar=True)
     embeddings = np.array(embeddings).astype("float32")
 
-    # ------------------------
     # FAISS
-    # ------------------------
-    dim = embeddings.shape[1]
-    index = faiss.IndexFlatL2(dim)
+    index = faiss.IndexFlatL2(embeddings.shape[1])
     index.add(embeddings)
+    faiss.write_index(index, f"{index_path}/faiss.index")
 
-    faiss.write_index(index, f"{INDEX_DIR}/faiss.index")
-
-    # ------------------------
-    # metadata保存
-    # ------------------------
-    with open(f"{INDEX_DIR}/meta.pkl", "wb") as f:
+    # meta
+    with open(f"{index_path}/meta.pkl", "wb") as f:
         pickle.dump((documents, metadatas), f)
 
-    # ------------------------
     # BM25
-    # ------------------------
     tokenized = [doc.split() for doc in documents]
     bm25 = BM25Okapi(tokenized)
 
-    with open(f"{INDEX_DIR}/bm25.pkl", "wb") as f:
+    with open(f"{index_path}/bm25.pkl", "wb") as f:
         pickle.dump(bm25, f)
 
-    print("Index build complete")
+    print(f"[{db_name}] Index build complete")
+
 
 if __name__ == "__main__":
-    ingest()
+    import sys
+    if len(sys.argv) < 2:
+        print("Usage: python ingest.py <db_name>")
+    else:
+        ingest(sys.argv[1])

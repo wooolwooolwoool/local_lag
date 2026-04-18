@@ -24,8 +24,8 @@ def build_prompt(query, contexts):
 
 
 @app.get("/query")
-def query(q: str):
-    results = hybrid_search(q)
+def query(q: str, db: str):
+    results = hybrid_search(q, db)
 
     prompt, sources = build_prompt(q, results)
     answer = generate(prompt)
